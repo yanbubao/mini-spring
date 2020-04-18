@@ -1,13 +1,9 @@
 package april.spring.mvcframework.v2.servlet;
 
-import april.spring.mvcframework.annotation.MiniAutowired;
-import april.spring.mvcframework.annotation.MiniController;
-import april.spring.mvcframework.annotation.MiniRequestMapping;
-import april.spring.mvcframework.annotation.MiniService;
+import april.spring.mvcframework.annotation.*;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.lang.StringUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import javax.servlet.ServletConfig;
 import javax.servlet.ServletException;
@@ -17,6 +13,7 @@ import javax.servlet.http.HttpServletResponse;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.net.URL;
@@ -25,9 +22,8 @@ import java.util.*;
 /**
  * @author yanzx
  */
+@Slf4j
 public class MiniDispatchServlet extends HttpServlet {
-
-    private static final Logger log = LoggerFactory.getLogger(MiniDispatchServlet.class);
 
     private static final String CONTEXT_CONFIG_LOCATION = "contextConfigLocation";
 
@@ -235,8 +231,6 @@ public class MiniDispatchServlet extends HttpServlet {
 
         String basePath = Objects.requireNonNull(url).getFile();
 
-        log.info("base url: {}", basePath);
-
         File classPath = new File(basePath);
 
         // classPath为/april/spring/的项目根目录，可理解为一个文件夹
@@ -280,7 +274,13 @@ public class MiniDispatchServlet extends HttpServlet {
     protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
 
         // 委派，通过url映射找到对应method去invoke
-        doDispatch(req, resp);
+        try {
+            doDispatch(req, resp);
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            resp.getWriter().write("500! message: " + Arrays.toString(e.getStackTrace()));
+        }
     }
 
     /**
@@ -289,9 +289,65 @@ public class MiniDispatchServlet extends HttpServlet {
      * @param req
      * @param resp
      */
-    private void doDispatch(HttpServletRequest req, HttpServletResponse resp) {
+    private void doDispatch(HttpServletRequest req, HttpServletResponse resp) throws Exception {
 
-        
+        String uri = req.getRequestURI();
+        log.info("uri: {}", uri);
+
+        String contextPath = req.getContextPath();
+        log.info("contextPath: {}", contextPath);
+
+        String urlMapper = uri.replaceAll(contextPath, "").replaceAll("/+", "/");
+
+        if (!handlerMapping.containsKey(urlMapper)) {
+            log.error("urlMapping error! url: {}", urlMapper);
+            resp.getWriter().write("404 NOT FOUND!");
+        }
+
+        Map<String, String[]> params = req.getParameterMap();
+        Method method = this.handlerMapping.get(urlMapper);
+
+        // 获取method型参列表
+        Class<?>[] parameterTypes = method.getParameterTypes();
+        Object[] paramValues = new Object[parameterTypes.length];
+
+        for (int i = 0; i < parameterTypes.length; i++) {
+
+            Class<?> parameterType = parameterTypes[i];
+
+            if (parameterType == HttpServletRequest.class) {
+                paramValues[i] = req;
+
+            } else if (parameterType == HttpServletResponse.class) {
+                paramValues[i] = resp;
+
+            } else if (parameterType == String.class) {
+                Annotation[][] methodParameterAnnotations = method.getParameterAnnotations();
+
+                for (int j = 0; j < methodParameterAnnotations.length; j++) {
+
+                    for (Annotation a : methodParameterAnnotations[i]) {
+                        if (a instanceof MiniRequestParam) {
+                            String paramName = ((MiniRequestParam) a).value();
+
+                            if (StringUtils.isNotEmpty(paramName.trim())) {
+                                String paramValue = Arrays.toString(params.get(paramName))
+                                        .replaceAll("\\[|\\]", "")
+                                        .replaceAll("\\s+", ",");
+
+                                paramValues[i] = paramValue;
+                            }
+                        }
+                    }
+                }
+
+            }
+        }
+
+        // 暂时硬编码
+        String methodName = toLowerFirstCase(method.getDeclaringClass().getSimpleName());
+
+        method.invoke(ioc.get(methodName), paramValues);
     }
 
     @Override
